@@ -11,9 +11,17 @@
  * 機能:
  * - シート <-> Google Tasks 双方向同期
  * - Google Tasks側で作った新規タスクをシートへ取り込み
+ * - サブタスク機能（双方向対応）:
+ *    * シート側: (main)メインタスク名
+ *    *           (sub1)サブタスク1
+ *    *           (sub2)サブタスク2
+ *    * Google Tasks側でサブタスクを作成すると、シートにもプレフィックス付きで反映
  * - 色付け:
  *    * 繰越未完了 = 赤
  *    * 繰越系列が完了済み = 元/繰越とも橙（赤優先）
+ * - 繰り越しタスクの自動非表示:
+ *    * 同じベースタイトルの繰り越しタスクが複数日付に存在する場合、
+ *      Google Tasks側では最も古い日付（元タスク）のみを表示し、新しい日付（繰り越し先）は完了化して非表示
  *
  * 自動繰り越し機能は現在無効化（手動で繰り越しを行うため）
  * Task IDは見える列には置かず、隠しシート _TaskSyncMap に保存
@@ -78,7 +86,10 @@ function syncDailyTasksBidirectional() {
     syncSheetDayToGoogleTasks_(sheet, taskListId, tomorrow);
   }
 
-  // 5) 色更新
+  // 5) 繰り越しタスクの古い日付をGoogle Tasks側で非表示化
+  hideOlderCarryoverTasksInGoogleTasks_(sheet, taskListId);
+
+  // 6) 色更新
   refreshTaskColors_();
 
   ss.toast(
@@ -130,6 +141,9 @@ function pollGoogleTasksCompletionToSheet() {
 
   // Tasks側で新規作成されたタスクも取り込む
   importNewGoogleTasksToSheet_(sheet, taskListId);
+
+  // 繰り越しタスクの古い日付をGoogle Tasks側で非表示化
+  hideOlderCarryoverTasksInGoogleTasks_(sheet, taskListId);
 
   refreshTaskColors_();
 }
@@ -367,25 +381,69 @@ function syncSingleCellTaskPairRow_(sheet, row, editedCol, taskListId) {
 
 /**
  * ある日付列セット（例 A/B列）を全部同期
+ * サブタスク機能に対応：メインタスクを先に処理してからサブタスクを処理
  */
 function syncTaskColumnPairToGoogleTasks_(sheet, titleCol, doneCol, dueDate, taskListId) {
   const lastRow = sheet.getLastRow();
   if (lastRow < TASK_SYNC_CONFIG.START_ROW) return;
 
+  // 全タスクを読み込んで分類
+  const tasks = [];
   for (let row = TASK_SYNC_CONFIG.START_ROW; row <= lastRow; row++) {
-    syncSingleTaskCellRow_(sheet, row, titleCol, doneCol, dueDate, taskListId);
+    const title = String(sheet.getRange(row, titleCol).getValue() || '').trim();
+    if (!title) continue;
+
+    tasks.push({
+      row: row,
+      title: title,
+      isMain: isMainTask_(title),
+      isSub: isSubTask_(title)
+    });
+  }
+
+  // 1) メインタスクと通常タスクを先に処理
+  for (const task of tasks) {
+    if (!task.isSub) {
+      syncSingleTaskCellRow_(sheet, task.row, titleCol, doneCol, dueDate, taskListId);
+    }
+  }
+
+  // 2) サブタスクを処理（親タスクIDが必要なので後で処理）
+  for (const task of tasks) {
+    if (task.isSub) {
+      // 直前のメインタスクを探す
+      let parentRow = null;
+      for (let i = task.row - 1; i >= TASK_SYNC_CONFIG.START_ROW; i--) {
+        const prevTitle = String(sheet.getRange(i, titleCol).getValue() || '').trim();
+        if (isMainTask_(prevTitle)) {
+          parentRow = i;
+          break;
+        }
+        // 別のサブタスクならスキップして探し続ける
+        if (!isSubTask_(prevTitle) && prevTitle) {
+          // 通常タスクに当たったら探索終了
+          break;
+        }
+      }
+
+      syncSingleTaskCellRow_(sheet, task.row, titleCol, doneCol, dueDate, taskListId, parentRow);
+    }
   }
 }
 
 /**
  * 1タスク（1行）を同期
+ * @param {number|null} parentRow - サブタスクの場合、親タスクの行番号
  */
-function syncSingleTaskCellRow_(sheet, row, titleCol, doneCol, dueDate, taskListId) {
+function syncSingleTaskCellRow_(sheet, row, titleCol, doneCol, dueDate, taskListId, parentRow) {
   const title = String(sheet.getRange(row, titleCol).getValue() || '').trim();
   const done = !!sheet.getRange(row, doneCol).getValue();
 
   // 空欄なら何もしない（既存Task削除まではしない仕様）
   if (!title) return;
+
+  // プレフィックスを削除したタイトル（Google Tasksに送信する）
+  const cleanTitle = removePrefixFromTitle_(title);
 
   const map = getTaskMapStore_();
   const key = makeTaskMapKey_(sheet.getName(), row, titleCol, doneCol);
@@ -394,15 +452,26 @@ function syncSingleTaskCellRow_(sheet, row, titleCol, doneCol, dueDate, taskList
 
   const dueIso = toTaskDueIso_(dueDate);
 
+  // サブタスクの場合、親タスクIDを取得
+  let parentTaskId = null;
+  if (parentRow && isSubTask_(title)) {
+    const parentKey = makeTaskMapKey_(sheet.getName(), parentRow, titleCol, doneCol);
+    const parentEntry = map[parentKey];
+    if (parentEntry && parentEntry.taskId) {
+      parentTaskId = parentEntry.taskId;
+    }
+  }
+
   // 新規作成
   if (!taskId) {
     const resource = {
-      title: title,
+      title: cleanTitle,
       notes: buildTaskNotes_(sheet.getName(), row, titleCol),
       due: dueIso,
       status: done ? 'completed' : 'needsAction',
     };
     if (done) resource.completed = new Date().toISOString();
+    if (parentTaskId) resource.parent = parentTaskId;
 
     const created = Tasks.Tasks.insert(resource, taskListId);
 
@@ -422,9 +491,14 @@ function syncSingleTaskCellRow_(sheet, row, titleCol, doneCol, dueDate, taskList
   try {
     const task = Tasks.Tasks.get(taskListId, taskId);
 
-    task.title = title;
+    task.title = cleanTitle;
     task.due = dueIso;
     task.notes = ensureSyncTag_(task.notes || '', sheet.getName(), row, titleCol);
+
+    // 親タスクの更新（サブタスクの場合）
+    if (parentTaskId && task.parent !== parentTaskId) {
+      task.parent = parentTaskId;
+    }
 
     if (done) {
       task.status = 'completed';
@@ -443,13 +517,16 @@ function syncSingleTaskCellRow_(sheet, row, titleCol, doneCol, dueDate, taskList
     // taskId無効なら再作成
     Logger.log(`Task update failed key=${key}, recreating: ${err}`);
 
-    const recreated = Tasks.Tasks.insert({
-      title: title,
+    const recreateResource = {
+      title: cleanTitle,
       notes: buildTaskNotes_(sheet.getName(), row, titleCol),
       due: dueIso,
       status: done ? 'completed' : 'needsAction',
       completed: done ? new Date().toISOString() : undefined,
-    }, taskListId);
+    };
+    if (parentTaskId) recreateResource.parent = parentTaskId;
+
+    const recreated = Tasks.Tasks.insert(recreateResource, taskListId);
 
     map[key] = {
       taskId: recreated.id || '',
@@ -533,6 +610,7 @@ function syncGoogleTasksToSheet_(sheet, taskListId) {
  * 条件:
  * - まだ _TaskSyncMap に存在しない taskId
  * - due がある（期日付き）
+ * サブタスク対応：親タスクを先に処理してから、サブタスクを処理
  */
 function importNewGoogleTasksToSheet_(sheet, taskListId) {
   const allTasks = listAllGoogleTasksMap_(taskListId);
@@ -545,6 +623,10 @@ function importNewGoogleTasksToSheet_(sheet, taskListId) {
       .filter(Boolean)
   );
 
+  // 未管理タスクを親タスクとサブタスクに分類
+  const newParentTasks = [];
+  const newSubTasks = [];
+
   for (const taskId in allTasks) {
     const task = allTasks[taskId];
     if (!task) continue;
@@ -555,6 +637,15 @@ function importNewGoogleTasksToSheet_(sheet, taskListId) {
     // dueなしは取り込み先日付がないのでスキップ
     if (!task.due) continue;
 
+    if (task.parent) {
+      newSubTasks.push(task);
+    } else {
+      newParentTasks.push(task);
+    }
+  }
+
+  // 1) 親タスクを先に処理
+  for (const task of newParentTasks) {
     const dueDate = parseTaskDueToLocalDate_(task.due);
     if (!dueDate) continue;
 
@@ -563,15 +654,18 @@ function importNewGoogleTasksToSheet_(sheet, taskListId) {
       pair = createDayPairColumn_(sheet, dueDate);
     }
 
+    // メインタスクとしてプレフィックスを付与
+    const titleWithPrefix = `(main)${task.title || ''}`;
+
     // 同じ日付列に同名タスクが既にあるならそこへ紐づけ（重複作成防止）
-    let matchedRow = findRowByTitleInColumn_(sheet, pair.titleCol, task.title || '', TASK_SYNC_CONFIG.START_ROW);
+    let matchedRow = findRowByTitleInColumn_(sheet, pair.titleCol, titleWithPrefix, TASK_SYNC_CONFIG.START_ROW);
 
     if (!matchedRow) {
       matchedRow = findFirstEmptyRowInColumn_(sheet, pair.titleCol, TASK_SYNC_CONFIG.START_ROW);
-      sheet.getRange(matchedRow, pair.titleCol).setValue(task.title || '');
+      sheet.getRange(matchedRow, pair.titleCol).setValue(titleWithPrefix);
     }
 
-    // 完了状態反映（ただし前日以前は戻さない仕様対象外 = 新規取り込み時だけはそのまま反映）
+    // 完了状態反映
     sheet.getRange(matchedRow, pair.doneCol).setValue(task.status === 'completed');
 
     // map登録
@@ -585,7 +679,102 @@ function importNewGoogleTasksToSheet_(sheet, taskListId) {
       doneCol: pair.doneCol,
     };
 
-    managedTaskIds.add(taskId);
+    managedTaskIds.add(task.id);
+  }
+
+  // 2) サブタスクを処理
+  for (const task of newSubTasks) {
+    const dueDate = parseTaskDueToLocalDate_(task.due);
+    if (!dueDate) continue;
+
+    let pair = findPairByDate_(sheet, dueDate);
+    if (!pair) {
+      pair = createDayPairColumn_(sheet, dueDate);
+    }
+
+    // 親タスクの行を探す
+    let parentRow = null;
+    for (const key in map) {
+      const entry = map[key];
+      if (entry.taskId === task.parent && entry.titleCol === pair.titleCol) {
+        parentRow = entry.row;
+        break;
+      }
+    }
+
+    // 親タスクが見つかった場合、タイトルに(main)がなければ追加
+    if (parentRow) {
+      const parentTitle = String(sheet.getRange(parentRow, pair.titleCol).getValue() || '').trim();
+      if (parentTitle && !isMainTask_(parentTitle) && !isSubTask_(parentTitle)) {
+        const newParentTitle = `(main)${parentTitle}`;
+        sheet.getRange(parentRow, pair.titleCol).setValue(newParentTitle);
+      }
+    }
+
+    if (!parentRow) {
+      // 親タスクが見つからない場合は通常タスクとして処理
+      Logger.log(`親タスクが見つからないため、通常タスクとして処理: ${task.title}`);
+      let matchedRow = findFirstEmptyRowInColumn_(sheet, pair.titleCol, TASK_SYNC_CONFIG.START_ROW);
+      sheet.getRange(matchedRow, pair.titleCol).setValue(task.title || '');
+      sheet.getRange(matchedRow, pair.doneCol).setValue(task.status === 'completed');
+
+      const key = makeTaskMapKey_(sheet.getName(), matchedRow, pair.titleCol, pair.doneCol);
+      map[key] = {
+        taskId: task.id || '',
+        updated: task.updated || '',
+        sheetName: sheet.getName(),
+        row: matchedRow,
+        titleCol: pair.titleCol,
+        doneCol: pair.doneCol,
+      };
+      managedTaskIds.add(task.id);
+      continue;
+    }
+
+    // 親タスクの下に既存のサブタスク数を数える
+    let subTaskCount = 0;
+    for (let r = parentRow + 1; r <= sheet.getLastRow(); r++) {
+      const title = String(sheet.getRange(r, pair.titleCol).getValue() || '').trim();
+      if (!title) break;
+      if (isSubTask_(title)) {
+        subTaskCount++;
+      } else if (isMainTask_(title)) {
+        // 次のメインタスクに到達したら終了
+        break;
+      } else {
+        // 通常タスクに到達したら終了
+        break;
+      }
+    }
+
+    // サブタスクとしてプレフィックスを付与
+    const subIndex = subTaskCount + 1;
+    const titleWithPrefix = `${makeSubTaskPrefix_(subIndex)}${task.title || ''}`;
+
+    // 親タスクの直後（既存サブタスクの後）に挿入
+    const insertRow = parentRow + subTaskCount + 1;
+
+    // 行が足りない場合は挿入
+    if (insertRow > sheet.getMaxRows()) {
+      sheet.insertRowsAfter(sheet.getMaxRows(), 1);
+    }
+
+    // タイトルと完了状態を設定
+    sheet.getRange(insertRow, pair.titleCol).setValue(titleWithPrefix);
+    sheet.getRange(insertRow, pair.doneCol).setValue(task.status === 'completed');
+
+    // map登録
+    const key = makeTaskMapKey_(sheet.getName(), insertRow, pair.titleCol, pair.doneCol);
+    map[key] = {
+      taskId: task.id || '',
+      updated: task.updated || '',
+      sheetName: sheet.getName(),
+      row: insertRow,
+      titleCol: pair.titleCol,
+      doneCol: pair.doneCol,
+    };
+
+    managedTaskIds.add(task.id);
   }
 
   saveTaskMapStore_(map);
@@ -614,6 +803,93 @@ function markTaskAsCompletedInGoogleTasksByCell_(sheet, row, titleCol, doneCol, 
     entry.updated = updated.updated || '';
   } catch (err) {
     Logger.log(`markTaskAsCompletedInGoogleTasksByCell_ failed: ${err}`);
+  }
+}
+
+/**
+ * 繰り越しタスクの新しい日付をGoogle Tasks側で非表示化
+ * 同じベースタイトルの繰り越しタスクが複数の日付にある場合、
+ * 最も古い日付（元タスク）のみを残し、新しい日付（繰り越し先）をGoogle Tasks側で完了化（非表示化）
+ */
+function hideOlderCarryoverTasksInGoogleTasks_(sheet, taskListId) {
+  const map = getTaskMapStore_();
+  const pairs = getTaskColumnPairs_(sheet);
+  if (!pairs.length) return;
+
+  // 全繰り越しタスクを収集 {baseTitle -> [{row, titleCol, doneCol, date, taskId, done}]}
+  const carryoverGroups = {}; // baseTitle -> array of task info
+
+  for (const pair of pairs) {
+    const headerVal = sheet.getRange(TASK_SYNC_CONFIG.HEADER_ROW, pair.titleCol).getValue();
+    const date = parseDateOnly_(headerVal);
+    if (!date) continue;
+
+    const lastRow = sheet.getLastRow();
+    if (lastRow < TASK_SYNC_CONFIG.START_ROW) continue;
+
+    const numRows = lastRow - TASK_SYNC_CONFIG.START_ROW + 1;
+    const titleVals = sheet.getRange(TASK_SYNC_CONFIG.START_ROW, pair.titleCol, numRows, 1).getValues();
+    const doneVals = sheet.getRange(TASK_SYNC_CONFIG.START_ROW, pair.doneCol, numRows, 1).getValues();
+
+    for (let i = 0; i < numRows; i++) {
+      const row = TASK_SYNC_CONFIG.START_ROW + i;
+      const title = String(titleVals[i][0] || '').trim();
+      if (!title) continue;
+
+      // 繰り越しタスクのみ対象
+      if (!isCarryoverTitle_(title)) continue;
+
+      const baseTitle = normalizeTaskBaseTitle_(title);
+      const done = !!doneVals[i][0];
+
+      // taskIdを取得
+      const key = makeTaskMapKey_(sheet.getName(), row, pair.titleCol, pair.doneCol);
+      const entry = map[key];
+      if (!entry || !entry.taskId) continue;
+
+      if (!carryoverGroups[baseTitle]) {
+        carryoverGroups[baseTitle] = [];
+      }
+
+      carryoverGroups[baseTitle].push({
+        row: row,
+        titleCol: pair.titleCol,
+        doneCol: pair.doneCol,
+        date: date,
+        taskId: entry.taskId,
+        done: done,
+        title: title
+      });
+    }
+  }
+
+  // 各グループごとに処理
+  for (const baseTitle in carryoverGroups) {
+    const tasks = carryoverGroups[baseTitle];
+    if (tasks.length <= 1) continue; // 1つしかない場合は処理不要
+
+    // 日付で昇順ソート（最も古い日付が先頭）
+    tasks.sort((a, b) => {
+      const timeA = a.date.getTime();
+      const timeB = b.date.getTime();
+      return timeA - timeB; // 昇順
+    });
+
+    // 最も古いタスク（先頭）以外を完了化（新しい方を非表示）
+    for (let i = 1; i < tasks.length; i++) {
+      const task = tasks[i];
+      try {
+        const gtask = Tasks.Tasks.get(taskListId, task.taskId);
+        if (gtask.status !== 'completed') {
+          gtask.status = 'completed';
+          if (!gtask.completed) gtask.completed = new Date().toISOString();
+          Tasks.Tasks.update(gtask, taskListId, task.taskId);
+          Logger.log(`新しい繰り越しタスクを完了化: ${task.title} (日付: ${task.date})`);
+        }
+      } catch (err) {
+        Logger.log(`hideOlderCarryoverTasks error for taskId ${task.taskId}: ${err}`);
+      }
+    }
   }
 }
 
@@ -1057,6 +1333,63 @@ function toTaskDueIso_(dateObj) {
 
 function normalizeTaskTitle_(s) {
   return String(s || '').trim().replace(/\s+/g, ' ');
+}
+
+/* =========================
+   サブタスク関連 helpers
+   ========================= */
+
+/**
+ * タスクタイプを判定: (main), (sub1), (sub2), ...
+ * @return {string|null} 'main', 'sub1', 'sub2', ... または null
+ */
+function getTaskType_(title) {
+  const s = String(title || '').trim();
+  const m = s.match(/^\((main|sub\d+)\)/);
+  return m ? m[1] : null;
+}
+
+/**
+ * メインタスクか判定
+ */
+function isMainTask_(title) {
+  return getTaskType_(title) === 'main';
+}
+
+/**
+ * サブタスクか判定
+ */
+function isSubTask_(title) {
+  const type = getTaskType_(title);
+  return type && type.startsWith('sub');
+}
+
+/**
+ * プレフィックスを削除したタイトルを取得
+ * 例: "(main)タスク名" -> "タスク名"
+ */
+function removePrefixFromTitle_(title) {
+  const s = String(title || '').trim();
+  return s.replace(/^\((main|sub\d+)\)\s*/, '');
+}
+
+/**
+ * サブタスク番号を取得
+ * 例: "(sub1)" -> 1, "(sub2)" -> 2
+ */
+function getSubTaskNumber_(title) {
+  const type = getTaskType_(title);
+  if (!type || !type.startsWith('sub')) return 0;
+  const m = type.match(/sub(\d+)/);
+  return m ? Number(m[1]) : 0;
+}
+
+/**
+ * サブタスクプレフィックスを生成
+ * 例: 1 -> "(sub1)", 2 -> "(sub2)"
+ */
+function makeSubTaskPrefix_(index) {
+  return `(sub${index})`;
 }
 
 /**

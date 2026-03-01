@@ -8,6 +8,7 @@ function onOpen() {
     .addSeparator()
     // Tasks同期
     .addItem('Tasks同期（今すぐ）', 'syncDailyTasksBidirectional')
+    .addItem('Tasks→シート反映（今すぐ）', 'pollGoogleTasksCompletionToSheet')
     .addItem('Tasks同期トリガー設定', 'setupDailyTaskSyncTriggers')
     .addItem('Tasks色を更新', 'refreshTaskColors')
     .addToUi();
