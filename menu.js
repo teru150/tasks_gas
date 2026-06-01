@@ -11,5 +11,9 @@ function onOpen() {
     .addItem('Tasks→シート反映（今すぐ）', 'pollGoogleTasksCompletionToSheet')
     .addItem('Tasks同期トリガー設定', 'setupDailyTaskSyncTriggers')
     .addItem('Tasks色を更新', 'refreshTaskColors')
+    .addItem('🚨 同期リセット (全削除・要確認)', 'resetDailyTaskSync')
+    .addSeparator()
+    // AI 週次プランナー
+    .addItem('AI週次プランナーを開く', 'openPlannerDialog')
     .addToUi();
 }

@@ -4,8 +4,8 @@
     "enabledAdvancedServices": [
       {
         "userSymbol": "Tasks",
-        "serviceId": "tasks",
-        "version": "v1"
+        "version": "v1",
+        "serviceId": "tasks"
       }
     ]
   },

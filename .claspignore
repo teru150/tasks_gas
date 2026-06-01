@@ -1,0 +1,14 @@
+# Files clasp should NOT push to Apps Script.
+# Default behavior is "push everything"; this list excludes things.
+
+**/.git/**
+**/node_modules/**
+**/*.md
+**/*.example
+**/.gitignore
+**/.claspignore
+**/.clasp.json
+**/.clasprc.json
+**/package.json
+**/package-lock.json
+**/.env*

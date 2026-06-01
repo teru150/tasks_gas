@@ -1,0 +1,23 @@
+# clasp
+.clasp.json
+.clasprc.json
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+
+# Local secrets
+*.local
+.env
+.env.*

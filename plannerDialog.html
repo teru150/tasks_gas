@@ -1,0 +1,812 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    :root {
+      font-family: -apple-system, "Helvetica Neue", "Hiragino Sans", "Yu Gothic UI", sans-serif;
+      font-size: 13px; --border:#d0d7de; --muted:#57606a; --accent:#1f6feb; --bg-mute:#f6f8fa;
+    }
+    body { margin: 0; padding: 0; color: #1f2328; height: 100vh; overflow: hidden; }
+    .app { display: grid; grid-template-rows: auto 1fr auto; height: 100vh; }
+    .topbar { padding: 10px 16px; border-bottom: 1px solid var(--border); background: white; }
+    .topbar h1 { font-size: 16px; margin: 0 0 4px; }
+    .topbar .meta { color: var(--muted); font-size: 12px; }
+    .topbar .pill { display:inline-block; background:#eaeef2; border-radius:10px; padding:1px 8px; font-size:11px; margin-right:4px; }
+    .topbar .ok-pill   { background:#ddf4e3; color:#1a7f37; }
+    .topbar .miss-pill { background:#ffe5e5; color:#b42318; }
+    .warn { background:#fff8c5; color:#7d4e00; padding:6px 10px; border-radius:6px; font-size:12px; margin-top:6px; }
+
+    .body { display: grid; grid-template-columns: 320px 1fr; min-height: 0; }
+
+    .side { border-right: 1px solid var(--border); background: var(--bg-mute); overflow-y: auto; padding: 12px; }
+    .side h2 { font-size: 11px; margin: 12px 0 4px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+    .side h2:first-child { margin-top: 0; }
+    .side .panel { background: white; border: 1px solid #eaeef2; border-radius: 6px; padding: 8px 10px; font-size: 11px; max-height: 220px; overflow:auto; }
+    .side .panel ul { margin:0; padding-left: 18px; }
+
+    .kbBtn { float:right; font-size:10px; padding:1px 6px; border:1px solid var(--border); background:white; border-radius:4px; cursor:pointer }
+    #kbView { white-space:pre-wrap; min-height:50px; line-height:1.5; }
+    #kbEditor textarea { width:100%; box-sizing:border-box; min-height:140px; font-size:11px; padding:6px; border:1px solid var(--border); border-radius:4px; font-family:inherit; resize:vertical; }
+    #kbEditor .row { margin-top:6px; display:flex; gap:6px; }
+    #kbEditor button { padding:5px 10px; border-radius:4px; font-size:11px; cursor:pointer; }
+    #kbSaveBtn { flex:1; border:0; background:var(--accent); color:white; }
+    #kbCancelBtn { border:1px solid var(--border); background:white; }
+    #kbStatus { font-size:10px; color:var(--muted); margin-top:4px; min-height:13px; }
+
+    .main { display: grid; grid-template-rows: 1fr auto; min-height: 0; }
+    .chatPane { padding: 12px 16px; overflow-y: auto; min-height: 0; }
+    .chatMsg { padding: 8px 12px; border-radius: 10px; margin: 6px 0; max-width: 92%; white-space: pre-wrap; }
+    .chatMsg.user { background: var(--accent); color: white; margin-left: auto; }
+    .chatMsg.assistant { background: var(--bg-mute); color: #1f2328; margin-right: auto; }
+    .chatMsg.system { background: #fff8c5; color: #7d4e00; margin: 8px auto; text-align: center; font-size: 11px; }
+    .chatMsg.thinking { color: var(--muted); font-style: italic; }
+
+    .blueprint { border-top: 1px solid var(--border); background: white; padding: 10px 16px; max-height: 380px; overflow: auto; }
+    .blueprint h3 { font-size: 13px; margin: 0 0 6px; }
+    .blueprint .sub { color: var(--muted); font-size: 11px; margin-bottom: 8px; }
+    table.bp { border-collapse: collapse; width: 100%; font-size: 11px; }
+    table.bp th, table.bp td { border: 1px solid #e0e4e8; padding: 2px 4px; vertical-align: top; }
+    table.bp th { background: var(--bg-mute); font-weight: 600; text-align: center; }
+    table.bp .timecol { width: 44px; text-align: center; color: var(--muted); background: #fafbfc; }
+    table.bp .cell { min-width: 86px; min-height: 22px; cursor: text; }
+    table.bp .cell.fixed { background: #f0f0f0; color: #888; cursor: not-allowed; font-size: 10px; }
+    table.bp .cell.empty { color: #ccc; }
+    table.bp .cell:focus { outline: 2px solid var(--accent); background: #f0f6ff; }
+    table.bp .cell[contenteditable="true"]:hover { background: #f6f8fa; }
+
+    .dailyBox { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-top: 10px; }
+    .dailyBox .col { border: 1px solid #e0e4e8; border-radius: 4px; padding: 4px; }
+    .dailyBox .col h4 { font-size: 10px; margin: 0 0 4px; color: var(--muted); }
+    .dailyBox textarea {
+      width: 100%; box-sizing: border-box; min-height: 90px;
+      border: 1px solid #eaeef2; border-radius: 4px; padding: 3px 4px; font-size: 11px; resize: vertical; font-family: inherit;
+    }
+
+    .composer { border-top: 1px solid var(--border); background: white; padding: 10px 16px; }
+    .composer .row { display: flex; gap: 8px; }
+    .composer textarea {
+      flex: 1; box-sizing: border-box; padding: 6px 8px; min-height: 38px; max-height: 160px;
+      border: 1px solid var(--border); border-radius: 6px; font-size: 13px; font-family: inherit; resize: vertical;
+    }
+    .composer button { padding: 6px 14px; font-size: 13px; border: 0; border-radius: 6px; cursor: pointer; background: var(--accent); color: white; }
+    .composer button:disabled { opacity: .55; cursor: wait; }
+
+    .commitBar { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+    .commitBar label { font-size: 11px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+    .commitBar .grow { flex: 1; }
+    .commitBar .write { background: #1a7f37; color: white; padding: 8px 16px; font-weight: 600; border-radius: 6px; border: 0; cursor: pointer; }
+    .commitBar .write:disabled { background: #b8d6c0; cursor: not-allowed; }
+    .commitBar .write:not(:disabled):hover { background: #136e2c; }
+    .commitBar .secondary { background: var(--bg-mute); color:#1f2328; border:1px solid var(--border); padding: 6px 12px; border-radius:6px; cursor:pointer; }
+
+    .resultBanner { padding: 8px 12px; border-radius: 6px; margin-top: 8px; font-size: 12px; white-space: pre-wrap; }
+    .resultBanner.ok  { background: #ddf4e3; color: #1a7f37; }
+    .resultBanner.err { background: #ffe5e5; color: #b42318; }
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <div class="topbar">
+    <h1>Weekly Schedule Planner</h1>
+    <div class="meta" id="weekMeta">読込中…</div>
+    <div style="margin-top:6px; font-size:12px;">
+      <label>対象開始日:
+        <input type="date" id="startDate" style="font-size:12px; padding:2px 4px; border:1px solid var(--border); border-radius:4px;">
+      </label>
+      <button id="applyStartBtn" style="font-size:11px; padding:3px 8px; margin-left:6px; border:1px solid var(--border); border-radius:4px; background:white; cursor:pointer;">適用</button>
+      <span style="color:var(--muted); margin-left:8px;">(空欄なら今日から7日間)</span>
+    </div>
+    <div id="apiKeyWarn" class="warn" style="display:none;">⚠️ ANTHROPIC_API_KEY が未設定。Project Settings → Script Properties で設定してください。</div>
+  </div>
+
+  <div class="body">
+
+    <aside class="side">
+      <h2>📚 全タスク (上位16件)</h2>
+      <div class="panel" id="topTasks">読み込み中…</div>
+
+      <h2>📅 既存の固定要素</h2>
+      <div class="panel" id="existing">読み込み中…</div>
+
+      <h2>🗓 Google カレンダー <button id="calToggleBtn" class="kbBtn">設定</button></h2>
+      <div class="panel" id="calView">読み込み中…</div>
+      <div id="calEditor" style="display:none;">
+        <textarea id="calText" placeholder="primary&#10;family-account@gmail.com&#10;abc123@group.calendar.google.com" style="width:100%; box-sizing:border-box; min-height:80px; font-size:11px; padding:6px; border:1px solid var(--border); border-radius:4px; font-family:inherit;"></textarea>
+        <div style="font-size:10px; color:var(--muted); margin-top:4px;">
+          1行 = 1カレンダー。家族アカウントは事前に「カレンダー共有」で本アカウントに共有しておくこと。
+        </div>
+        <div class="row">
+          <button id="calSaveBtn">💾 保存</button>
+          <button id="calCancelBtn">キャンセル</button>
+        </div>
+        <div id="calStatus"></div>
+      </div>
+
+      <h2>🎨 色ラベル <button id="colorScanBtn" class="kbBtn" style="margin-right:4px;">色を診断</button><button id="colorToggleBtn" class="kbBtn">編集</button></h2>
+      <div class="panel" id="colorView">読み込み中…</div>
+      <div id="colorEditor" style="display:none;">
+        <textarea id="colorText" placeholder="#cfe2f3=空きコマ&#10;#3d85c6=内職&#10;#93c47d=授業" style="width:100%; box-sizing:border-box; min-height:100px; font-size:11px; padding:6px; border:1px solid var(--border); border-radius:4px; font-family:monospace;"></textarea>
+        <div style="font-size:10px; color:var(--muted); margin-top:4px;">1行 = 1色。 #rrggbb=ラベル の形式。「色を診断」で実際に使われている色を取得できます。</div>
+        <div class="row">
+          <button id="colorSaveBtn">💾 保存</button>
+          <button id="colorCancelBtn">キャンセル</button>
+        </div>
+        <div id="colorStatus"></div>
+      </div>
+
+      <h2>🧠 ナレッジベース <button id="kbToggleBtn" class="kbBtn">編集</button></h2>
+      <div class="panel" id="kbView">読み込み中…</div>
+      <div id="kbEditor" style="display:none;">
+        <textarea id="kbText" placeholder="例:&#10;・私は鳥人間コンテストのチームで航空機を設計している (略称「鳥」「鳥コン」)&#10;・「JPREP」は週2の英語塾&#10;・「TiB」「開成」は学校名&#10;・WBSは作業分解図&#10;・5/7のAP物理が一番大事"></textarea>
+        <div class="row">
+          <button id="kbSaveBtn">💾 保存</button>
+          <button id="kbCancelBtn">キャンセル</button>
+        </div>
+        <div id="kbStatus"></div>
+      </div>
+
+      <h2>使い方</h2>
+      <div class="panel" style="line-height:1.5">
+        AIに来週の予定について自由に話してください。<br>
+        AIが「ブループリント案」を作るとこの右側下部に編集可能なグリッドが現れます。<br>
+        <b>「Write it down」</b>を押すまでシートには一切書き込まれません。<br>
+        固有名詞・略語は <b>ナレッジベース</b> に書いておくとAIが毎回踏まえます。
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="chatPane" id="chatPane">
+        <div class="chatMsg system">過去の会話を読込中…</div>
+      </div>
+
+      <div class="blueprint" id="blueprintWrap" style="display:none;">
+        <h3>📋 計画案ブループリント (編集可能 — まだシートには反映されていません)</h3>
+        <div class="sub" id="bpSummary"></div>
+
+        <h4 style="font-size:11px; margin:8px 0 4px; color:var(--muted)">⏰ 週予定 (時間ブロック)</h4>
+        <div id="bpScheduleTable"></div>
+
+        <h4 style="font-size:11px; margin:12px 0 4px; color:var(--muted)">✅ 毎日のタスク</h4>
+        <div class="dailyBox" id="bpDaily"></div>
+
+        <div class="commitBar">
+          <label><input type="checkbox" id="optWriteWeek" checked> 週予定に書く</label>
+          <label><input type="checkbox" id="optWriteDaily" checked> 毎日のタスクに書く</label>
+          <span class="grow"></span>
+          <button class="secondary" id="discardBtn">案を捨てる</button>
+          <button class="write" id="writeBtn">📥 Write it down</button>
+        </div>
+
+        <div id="result"></div>
+      </div>
+    </main>
+  </div>
+
+  <div class="composer">
+    <div class="row">
+      <textarea id="userInput" placeholder="例: 来週は中間試験前。Physics 2 と Chemistry 中心。木曜は鳥コンで埋まってる。土日は4時間取れる。&#10;&#10;Enter = 送信 / Shift+Enter = 改行"></textarea>
+      <button id="sendBtn">送信</button>
+    </div>
+    <div style="margin-top:6px; font-size:11px; color:var(--muted); display:flex; align-items:center; gap:6px;">
+      <span>💾 会話は隠しシート <code>_PlannerChatLog</code> に保存され、次回開いたとき続きから話せます。</span>
+      <span style="flex:1;"></span>
+      <button id="clearHistoryBtn" style="font-size:10px; padding:3px 8px; border:1px solid var(--border); border-radius:4px; background:white; cursor:pointer;">🗑 会話履歴をリセット</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const state = { history: [], plan: null, context: null, startYmd: '' };
+  let kbCurrent = '';
+
+  function todayYmd() {
+    const d = new Date();
+    return d.getFullYear() + '-' + ('0'+(d.getMonth()+1)).slice(-2) + '-' + ('0'+d.getDate()).slice(-2);
+  }
+
+  function $(id) { return document.getElementById(id); }
+  function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
+
+  // ─────────── Init ───────────
+  // 初期化: 日付ピッカーを今日にセット
+  $('startDate').value = todayYmd();
+  state.startYmd = $('startDate').value;
+
+  function reloadContext() {
+    state.startYmd = $('startDate').value || '';
+    google.script.run
+      .withSuccessHandler(renderContext)
+      .withFailureHandler(err => { $('weekMeta').textContent = 'コンテキスト取得失敗: ' + (err && err.message || err); })
+      .getPlannerContext(state.startYmd);
+  }
+  $('applyStartBtn').addEventListener('click', reloadContext);
+
+  reloadContext();
+
+  google.script.run
+    .withSuccessHandler(has => { if (!has) $('apiKeyWarn').style.display = 'block'; })
+    .plannerHasApiKey();
+
+  google.script.run
+    .withSuccessHandler(text => { kbCurrent = text || ''; renderKbView(); })
+    .plannerGetKnowledgeBase();
+
+  // ─────────── 永続会話ログ 復元 ───────────
+  google.script.run
+    .withSuccessHandler(restoreHistory)
+    .withFailureHandler(err => {
+      $('chatPane').innerHTML = '';
+      appendChat('system', '会話履歴の読込に失敗: ' + (err && err.message || err));
+      appendChat('system', '新しい会話を始めてください。');
+    })
+    .plannerLoadHistory();
+
+  function restoreHistory(messages) {
+    $('chatPane').innerHTML = '';
+    if (!messages || !messages.length) {
+      appendChat('system', '来週の予定について、自由に話しかけてください。');
+      return;
+    }
+    appendChat('system', '💾 過去の会話 ' + messages.length + ' 件を復元しました。続きからどうぞ。');
+    messages.forEach(m => {
+      // assistant の生応答は ```plan ブロックを含むので除いて表示
+      let text = m.content;
+      if (m.role === 'assistant') {
+        const mm = text.match(/```plan\s*([\s\S]*?)```/);
+        if (mm) text = text.replace(mm[0], '').trim() || '(計画案)';
+      }
+      appendChat(m.role, text);
+    });
+  }
+
+  $('clearHistoryBtn').addEventListener('click', () => {
+    if (!confirm('会話履歴を全削除しますか? (シート _PlannerChatLog の中身がクリアされます)')) return;
+    google.script.run
+      .withSuccessHandler(() => {
+        $('chatPane').innerHTML = '';
+        appendChat('system', '✅ 会話履歴をリセットしました。');
+      })
+      .plannerClearHistory();
+  });
+
+  function renderContext(ctx) {
+    state.context = ctx;
+    const meta = '<b>対象期間:</b> ' + ctx.targetWeek.labels.join(' / ') +
+      '  <span class="pill ' + (ctx.weekColumnsFound===7?'ok-pill':'miss-pill') + '">週予定列 ' + ctx.weekColumnsFound + '/7</span>' +
+      '  <span class="pill">タスク ' + ctx.tasksCount + '件</span>' +
+      '  <span class="pill">時間スロット ' + ctx.timeSlots.length + '行</span>' +
+      '  <span class="pill">📆 ' + (ctx.calendarEventCount || 0) + '件 (' + (ctx.calendarIds || []).length + ' cal)</span>';
+    $('weekMeta').innerHTML = meta;
+    renderCalendarView(ctx);
+    renderColorView();
+
+    if (!ctx.hasTasksSheet) $('topTasks').innerHTML = '<span class="miss-pill">「全タスク」シートが見つかりません</span>';
+    else if (!ctx.topTasks.length) $('topTasks').textContent = '(タスクなし)';
+    else $('topTasks').innerHTML = '<ul>' + ctx.topTasks.map(t => '<li>' + escapeHtml(t) + '</li>').join('') + '</ul>';
+
+    if (!ctx.hasWeekSheet) $('existing').innerHTML = '<span class="miss-pill">「週予定」シートが見つかりません</span>';
+    else {
+      let html = '';
+      ctx.existingFixed.forEach(day => {
+        html += '<div><b>' + escapeHtml(day.label) + '</b> ';
+        if (day.status === 'no_column') html += '<span class="pill miss-pill">列がまだありません</span></div>';
+        else if (!day.items.length) html += '<span class="pill">空き</span></div>';
+        else html += '<ul>' + day.items.map(it => {
+          const sw = it.bg ? '<span style="display:inline-block;width:8px;height:8px;background:' + it.bg + ';border:1px solid #aaa;border-radius:2px;margin-right:3px;vertical-align:middle;"></span>' : '';
+          const lab = it.label ? ' <b style="color:#1f6feb;">[' + escapeHtml(it.label) + ']</b>' : '';
+          return '<li>' + sw + escapeHtml(it.time) + ':' + lab + ' ' + escapeHtml(it.text || '(空)') + '</li>';
+        }).join('') + '</ul></div>';
+      });
+      $('existing').innerHTML = html || '(空)';
+    }
+  }
+
+  // ─────────── Knowledge Base ───────────
+  function renderKbView() {
+    const view = $('kbView');
+    if (!kbCurrent.trim()) view.innerHTML = '<span style="color:#bbb">(未設定 — 「編集」を押して固有名詞や略語を書いておくとAIが踏まえます)</span>';
+    else view.textContent = kbCurrent;
+  }
+
+  $('kbToggleBtn').addEventListener('click', () => {
+    const editing = $('kbEditor').style.display !== 'none';
+    if (editing) {
+      $('kbEditor').style.display = 'none';
+      $('kbView').style.display = '';
+      $('kbToggleBtn').textContent = '編集';
+    } else {
+      $('kbText').value = kbCurrent;
+      $('kbEditor').style.display = '';
+      $('kbView').style.display = 'none';
+      $('kbToggleBtn').textContent = '閉じる';
+      $('kbStatus').textContent = '';
+    }
+  });
+
+  $('kbCancelBtn').addEventListener('click', () => {
+    $('kbEditor').style.display = 'none';
+    $('kbView').style.display = '';
+    $('kbToggleBtn').textContent = '編集';
+  });
+
+  $('kbSaveBtn').addEventListener('click', () => {
+    const text = $('kbText').value;
+    $('kbSaveBtn').disabled = true;
+    $('kbStatus').textContent = '保存中…';
+    google.script.run
+      .withSuccessHandler(res => {
+        $('kbSaveBtn').disabled = false;
+        if (res && res.ok) {
+          kbCurrent = text;
+          renderKbView();
+          $('kbStatus').textContent = '✅ 保存しました (' + res.length + '文字' + (res.truncated ? ' / 上限超過のため切り詰め' : '') + ')';
+          setTimeout(() => {
+            $('kbEditor').style.display = 'none';
+            $('kbView').style.display = '';
+            $('kbToggleBtn').textContent = '編集';
+          }, 800);
+        } else {
+          $('kbStatus').textContent = '❌ 保存失敗';
+        }
+      })
+      .withFailureHandler(err => {
+        $('kbSaveBtn').disabled = false;
+        $('kbStatus').textContent = '❌ ' + (err && err.message || err);
+      })
+      .plannerSaveKnowledgeBase(text);
+  });
+
+  // ─────────── Calendar config ───────────
+  function renderCalendarView(ctx) {
+    const ids = ctx.calendarIds || [];
+    const events = ctx.calendarEvents || {};
+    let html = '<div style="font-size:11px; color:var(--muted); margin-bottom:4px;">対象カレンダー: ' + (ids.length ? ids.map(escapeHtml).join(', ') : '(未設定)') + '</div>';
+    if (!ids.length) {
+      html += '<span style="color:#bbb">「設定」を押してカレンダーIDを追加。primary だけでもOK。</span>';
+    } else {
+      ctx.targetWeek.dates.forEach((dt, i) => {
+        const items = events[dt] || [];
+        if (!items.length) return;
+        html += '<div><b>' + escapeHtml(ctx.targetWeek.labels[i]) + '</b>';
+        html += '<ul>' + items.map(e => '<li>' + escapeHtml(e.time) + ' [' + escapeHtml(e.source) + '] ' + escapeHtml(e.title) + '</li>').join('') + '</ul></div>';
+      });
+      if (ctx.calendarEventCount === 0) html += '<span style="color:#bbb">対象期間にイベントはありません。</span>';
+    }
+    $('calView').innerHTML = html;
+  }
+
+  $('calToggleBtn').addEventListener('click', () => {
+    const editing = $('calEditor').style.display !== 'none';
+    if (editing) {
+      $('calEditor').style.display = 'none';
+      $('calView').style.display = '';
+      $('calToggleBtn').textContent = '設定';
+    } else {
+      $('calText').value = ((state.context && state.context.calendarIds) || []).join('\n');
+      $('calEditor').style.display = '';
+      $('calView').style.display = 'none';
+      $('calToggleBtn').textContent = '閉じる';
+      $('calStatus').textContent = '';
+    }
+  });
+
+  $('calCancelBtn').addEventListener('click', () => {
+    $('calEditor').style.display = 'none';
+    $('calView').style.display = '';
+    $('calToggleBtn').textContent = '設定';
+  });
+
+  $('calSaveBtn').addEventListener('click', () => {
+    const text = $('calText').value;
+    $('calSaveBtn').disabled = true;
+    $('calStatus').textContent = '保存・検証中…';
+    google.script.run
+      .withSuccessHandler(res => {
+        $('calSaveBtn').disabled = false;
+        if (res && res.ok) {
+          const okCount = res.checks.filter(c => c.ok).length;
+          const fails = res.checks.filter(c => !c.ok);
+          let msg = '✅ ' + okCount + '/' + res.count + ' 件アクセスOK';
+          if (fails.length) msg += '\n❌ ' + fails.map(f => f.id + ': ' + f.error).join('\n');
+          $('calStatus').textContent = msg;
+          // コンテキスト再読み込み
+          google.script.run.withSuccessHandler(renderContext).getPlannerContext();
+        } else {
+          $('calStatus').textContent = '❌ 保存失敗';
+        }
+      })
+      .withFailureHandler(err => {
+        $('calSaveBtn').disabled = false;
+        $('calStatus').textContent = '❌ ' + (err && err.message || err);
+      })
+      .plannerSaveCalendarIds(text);
+  });
+
+  // ─────────── Color labels ───────────
+  function renderColorView() {
+    const ctx = state.context;
+    const map = (ctx && ctx.colorMap) || {};
+    const keys = Object.keys(map);
+    if (!keys.length) {
+      $('colorView').innerHTML = '<span style="color:#bbb">(未設定 — 「色を診断」で実際の色を取得し、「編集」でラベル付け)</span>';
+    } else {
+      $('colorView').innerHTML = keys.map(hex =>
+        '<div style="display:flex;align-items:center;gap:6px;margin:2px 0;">' +
+        '<span style="display:inline-block;width:18px;height:14px;background:' + hex + ';border:1px solid #ccc;border-radius:3px;"></span>' +
+        '<code style="font-size:10px;">' + hex + '</code> = ' + escapeHtml(map[hex]) +
+        '</div>'
+      ).join('');
+    }
+  }
+
+  $('colorToggleBtn').addEventListener('click', () => {
+    const editing = $('colorEditor').style.display !== 'none';
+    if (editing) {
+      $('colorEditor').style.display = 'none';
+      $('colorView').style.display = '';
+      $('colorToggleBtn').textContent = '編集';
+    } else {
+      $('colorText').value = (state.context && state.context.colorMapRaw) || '';
+      $('colorEditor').style.display = '';
+      $('colorView').style.display = 'none';
+      $('colorToggleBtn').textContent = '閉じる';
+      $('colorStatus').textContent = '';
+    }
+  });
+
+  $('colorCancelBtn').addEventListener('click', () => {
+    $('colorEditor').style.display = 'none';
+    $('colorView').style.display = '';
+    $('colorToggleBtn').textContent = '編集';
+  });
+
+  $('colorSaveBtn').addEventListener('click', () => {
+    const text = $('colorText').value;
+    $('colorSaveBtn').disabled = true;
+    $('colorStatus').textContent = '保存中…';
+    google.script.run
+      .withSuccessHandler(res => {
+        $('colorSaveBtn').disabled = false;
+        $('colorStatus').textContent = '✅ 保存しました';
+        google.script.run.withSuccessHandler(renderContext).getPlannerContext(state.startYmd || '');
+      })
+      .withFailureHandler(err => {
+        $('colorSaveBtn').disabled = false;
+        $('colorStatus').textContent = '❌ ' + (err && err.message || err);
+      })
+      .plannerSaveColorLabels(text);
+  });
+
+  $('colorScanBtn').addEventListener('click', () => {
+    $('colorScanBtn').disabled = true;
+    google.script.run
+      .withSuccessHandler(colors => {
+        $('colorScanBtn').disabled = false;
+        if (!colors || !colors.length) {
+          $('colorView').innerHTML = '<span style="color:#bbb">対象週に色付きセルが見つかりませんでした。</span>';
+          return;
+        }
+        const map = (state.context && state.context.colorMap) || {};
+        $('colorView').innerHTML =
+          '<div style="font-size:10px; color:var(--muted); margin-bottom:4px;">対象週で見つかった色 (使用回数順)</div>' +
+          colors.map(c => {
+            const lbl = map[c.hex] ? '<b>' + escapeHtml(map[c.hex]) + '</b>' : '<i style="color:#b42318;">未ラベル</i>';
+            const samples = c.samples.length ? ' — 例: ' + c.samples.slice(0,2).map(escapeHtml).join(', ') : '';
+            return '<div style="display:flex;align-items:center;gap:6px;margin:2px 0;">' +
+              '<span style="display:inline-block;width:18px;height:14px;background:' + c.hex + ';border:1px solid #ccc;border-radius:3px;"></span>' +
+              '<code style="font-size:10px;">' + c.hex + '</code> ×' + c.count + ' ' + lbl +
+              '<span style="font-size:10px;color:var(--muted);">' + escapeHtml(samples) + '</span></div>';
+          }).join('');
+      })
+      .withFailureHandler(err => {
+        $('colorScanBtn').disabled = false;
+        $('colorView').innerHTML = '<span style="color:#b42318;">❌ ' + (err && err.message || err) + '</span>';
+      })
+      .plannerScanWeekColors(state.startYmd || '');
+  });
+
+  // ─────────── Chat ───────────
+  function appendChat(role, text, extraClass) {
+    const div = document.createElement('div');
+    div.className = 'chatMsg ' + role + (extraClass ? ' ' + extraClass : '');
+    div.textContent = text;
+    $('chatPane').appendChild(div);
+    $('chatPane').scrollTop = $('chatPane').scrollHeight;
+    return div;
+  }
+
+  function sendMessage() {
+    const input = $('userInput').value.trim();
+    if (!input) return;
+    $('userInput').value = '';
+
+    appendChat('user', input);
+    state.history.push({ role: 'user', content: input });
+
+    $('sendBtn').disabled = true;
+    const thinking = appendChat('assistant', 'Claude が考え中…', 'thinking');
+
+    google.script.run
+      .withSuccessHandler(res => {
+        thinking.remove();
+        $('sendBtn').disabled = false;
+        if (!res || !res.ok) {
+          appendChat('system', '❌ ' + (res && res.error || '不明なエラー'));
+          return;
+        }
+        const replyText = res.reply || '';
+        appendChat('assistant', replyText);
+        state.history.push({ role: 'assistant', content: res.raw || replyText });
+
+        if (res.plan && res.ready) {
+          state.plan = normalizePlan(res.plan);
+          renderBlueprint();
+        }
+      })
+      .withFailureHandler(err => {
+        thinking.remove();
+        $('sendBtn').disabled = false;
+        appendChat('system', '❌ 通信エラー: ' + (err && err.message || err));
+      })
+      .plannerChat(state.history.slice(0, -1), input, state.startYmd || '');
+  }
+
+  $('sendBtn').addEventListener('click', sendMessage);
+  $('userInput').addEventListener('keydown', e => {
+    // Enter で送信 / Shift+Enter で改行 / IME変換中は送信しない
+    if (e.key !== 'Enter') return;
+    if (e.isComposing || e.keyCode === 229) return; // 日本語IME変換中
+    if (e.shiftKey) return;                          // 改行はそのまま許可
+    e.preventDefault();
+    sendMessage();
+  });
+
+  // ─────────── Plan normalize / render ───────────
+  function normalizePlan(plan) {
+    const dates = state.context.targetWeek.dates;
+    const labels = state.context.targetWeek.labels;
+    const byDate = {};
+    (plan.days || []).forEach(d => { byDate[d.date] = d; });
+
+    const days = dates.map((dt, i) => {
+      const src = byDate[dt] || {};
+      return {
+        date: dt,
+        label: labels[i],
+        daily_tasks: Array.isArray(src.daily_tasks) ? src.daily_tasks.filter(x => String(x||'').trim()) : [],
+        schedule: Array.isArray(src.schedule) ? src.schedule.map(s => ({
+          time: String(s.time||''),
+          title: String(s.title||''),
+          task_row: s.task_row || null,
+        })).filter(s => s.time && s.title) : [],
+      };
+    });
+    // task_changes は AI からそのまま受け取り、ユーザが個別に承認
+    const taskChanges = Array.isArray(plan.task_changes) ? plan.task_changes.map(c => ({
+      action: c.action,
+      row: c.row,
+      field: c.field,
+      value: c.value,
+      task: c.task,
+      reason: c.reason || '',
+      approved: true, // デフォルト承認
+    })) : [];
+    return { summary: plan.summary || '', days: days, task_changes: taskChanges };
+  }
+
+  function renderBlueprint() {
+    if (!state.plan) return;
+    $('blueprintWrap').style.display = 'block';
+    $('bpSummary').textContent = state.plan.summary || '';
+
+    const fixedMap = {};
+    (state.context.existingFixed || []).forEach(day => {
+      fixedMap[day.date] = {};
+      (day.items || []).forEach(it => { fixedMap[day.date][it.time] = '📅 ' + it.text; });
+    });
+    // Google カレンダーイベントも fixed として時刻スロットへスナップ (時間がスロットと一致するもの)
+    const calEvents = state.context.calendarEvents || {};
+    Object.keys(calEvents).forEach(dateKey => {
+      if (!fixedMap[dateKey]) fixedMap[dateKey] = {};
+      (calEvents[dateKey] || []).forEach(ev => {
+        if (ev.isAllDay) return;
+        const tm = ev.startHour + ':' + ('0' + ev.startMin).slice(-2);
+        // exact match
+        if (!fixedMap[dateKey][tm]) fixedMap[dateKey][tm] = '📆 ' + ev.title;
+        // hour-only match (8:00 形式)
+        const hourLabel = ev.startHour + ':00';
+        if (!fixedMap[dateKey][hourLabel]) fixedMap[dateKey][hourLabel] = '📆 ' + ev.title;
+      });
+    });
+
+    const slots = state.context.timeSlots;
+    const days = state.plan.days;
+
+    const planMap = {};
+    days.forEach(d => {
+      planMap[d.date] = {};
+      d.schedule.forEach(s => { planMap[d.date][s.time] = s.title; });
+    });
+
+    let html = '<table class="bp"><thead><tr><th class="timecol">時刻</th>';
+    days.forEach(d => { html += '<th>' + escapeHtml(d.label) + '</th>'; });
+    html += '</tr></thead><tbody>';
+
+    slots.forEach(slot => {
+      html += '<tr><td class="timecol">' + escapeHtml(slot) + '</td>';
+      days.forEach(d => {
+        const fixed = fixedMap[d.date] && fixedMap[d.date][slot];
+        if (fixed) {
+          html += '<td class="cell fixed" title="既存の固定要素 — 上書きしません">🔒 ' + escapeHtml(fixed) + '</td>';
+        } else {
+          const val = (planMap[d.date] && planMap[d.date][slot]) || '';
+          const cls = val ? 'cell' : 'cell empty';
+          html += '<td class="' + cls + '" contenteditable="true" data-date="' + d.date + '" data-time="' + escapeHtml(slot) + '">' + escapeHtml(val) + '</td>';
+        }
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    $('bpScheduleTable').innerHTML = html;
+
+    $('bpScheduleTable').querySelectorAll('td.cell[contenteditable="true"]').forEach(cell => {
+      cell.addEventListener('blur', () => {
+        const date = cell.dataset.date;
+        const time = cell.dataset.time;
+        const text = cell.textContent.trim();
+        const day = state.plan.days.find(x => x.date === date);
+        if (!day) return;
+        const idx = day.schedule.findIndex(s => s.time === time);
+        if (text) {
+          if (idx >= 0) day.schedule[idx].title = text;
+          else day.schedule.push({ time: time, title: text, task_row: null });
+          cell.classList.remove('empty');
+        } else {
+          if (idx >= 0) day.schedule.splice(idx, 1);
+          cell.classList.add('empty');
+        }
+      });
+    });
+
+    let dailyHtml = '';
+    days.forEach((d, i) => {
+      dailyHtml += '<div class="col"><h4>' + escapeHtml(d.label) + '</h4>'
+                +  '<textarea data-idx="' + i + '">' + escapeHtml(d.daily_tasks.join('\n')) + '</textarea></div>';
+    });
+    $('bpDaily').innerHTML = dailyHtml;
+    $('bpDaily').querySelectorAll('textarea').forEach(ta => {
+      ta.addEventListener('blur', () => {
+        const i = Number(ta.dataset.idx);
+        state.plan.days[i].daily_tasks = ta.value.split('\n').map(s => s.trim()).filter(Boolean);
+      });
+    });
+
+    renderTaskChanges();
+
+    $('blueprintWrap').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  // ─────────── Task changes (全タスク 編集案) ───────────
+  function renderTaskChanges() {
+    let host = $('bpTaskChanges');
+    if (!host) {
+      // 動的に生成
+      const wrap = document.createElement('div');
+      wrap.id = 'bpTaskChangesWrap';
+      wrap.innerHTML = '<h4 style="font-size:11px; margin:14px 0 4px; color:var(--muted)">🔧 全タスクシートへの変更案 (チェックを入れたものだけ反映)</h4><div id="bpTaskChanges"></div>';
+      $('bpDaily').parentNode.insertBefore(wrap, $('bpDaily').nextSibling);
+      host = $('bpTaskChanges');
+    }
+    const changes = state.plan.task_changes || [];
+    if (!changes.length) {
+      host.innerHTML = '<div style="font-size:11px; color:#bbb; padding:6px;">(なし)</div>';
+      return;
+    }
+    let html = '<table style="width:100%; border-collapse:collapse; font-size:11px;">';
+    html += '<thead><tr style="background:var(--bg-mute);">'
+         +  '<th style="width:30px;">使う</th>'
+         +  '<th style="width:60px;">action</th>'
+         +  '<th style="width:50px;">row</th>'
+         +  '<th style="width:90px;">field/task</th>'
+         +  '<th>value</th>'
+         +  '<th style="width:35%">理由</th>'
+         +  '</tr></thead><tbody>';
+    changes.forEach((c, i) => {
+      const isAdd = c.action === 'add';
+      const fieldOrTask = isAdd ? (c.task && c.task.task || '(無題)') : c.field;
+      const valueStr = isAdd ? JSON.stringify(c.task) : (c.value === null || c.value === undefined ? '' : String(c.value));
+      html += '<tr>'
+           +  '<td style="text-align:center;"><input type="checkbox" data-idx="' + i + '" class="tc-approve"' + (c.approved ? ' checked' : '') + '></td>'
+           +  '<td>' + escapeHtml(c.action || '') + '</td>'
+           +  '<td>' + escapeHtml(isAdd ? '(new)' : String(c.row || '')) + '</td>'
+           +  '<td>' + escapeHtml(fieldOrTask) + '</td>'
+           +  '<td><input type="text" data-idx="' + i + '" class="tc-value" style="width:100%; box-sizing:border-box; padding:2px 4px; border:1px solid #eaeef2; border-radius:3px;" value="' + escapeHtml(valueStr) + '"></td>'
+           +  '<td style="font-size:10px; color:var(--muted);">' + escapeHtml(c.reason || '') + '</td>'
+           +  '</tr>';
+    });
+    html += '</tbody></table>';
+    host.innerHTML = html;
+
+    host.querySelectorAll('.tc-approve').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const i = Number(cb.dataset.idx);
+        state.plan.task_changes[i].approved = cb.checked;
+      });
+    });
+    host.querySelectorAll('.tc-value').forEach(inp => {
+      inp.addEventListener('blur', () => {
+        const i = Number(inp.dataset.idx);
+        const c = state.plan.task_changes[i];
+        if (c.action === 'add') {
+          try { c.task = JSON.parse(inp.value); }
+          catch (e) { /* keep old */ }
+        } else {
+          c.value = inp.value;
+        }
+      });
+    });
+  }
+
+  // ─────────── Commit ───────────
+  $('writeBtn').addEventListener('click', commitPlan);
+  $('discardBtn').addEventListener('click', discardPlan);
+
+  function commitPlan() {
+    if (!state.plan) return;
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+
+    const writeBtn = $('writeBtn');
+    writeBtn.disabled = true;
+    writeBtn.textContent = '書き込み中…';
+    $('result').innerHTML = '';
+
+    const approvedChanges = (state.plan.task_changes || [])
+      .filter(c => c.approved)
+      .map(c => ({ action: c.action, row: c.row, field: c.field, value: c.value, task: c.task, reason: c.reason }));
+
+    const opts = {
+      writeToWeek: $('optWriteWeek').checked,
+      writeToDaily: $('optWriteDaily').checked,
+      taskChanges: approvedChanges,
+      startYmd: state.startYmd || '',
+    };
+
+    google.script.run
+      .withSuccessHandler(res => {
+        writeBtn.disabled = false;
+        writeBtn.textContent = '📥 Write it down';
+        if (res && res.ok) {
+          let msg = '✅ シートに書き込みました\n';
+          msg += '・毎日のタスク: ' + res.dailyWritten + '件\n';
+          msg += '・週予定: ' + res.scheduleWritten + '件';
+          if (res.scheduleSkipped) msg += ' (既存セルでスキップ: ' + res.scheduleSkipped + ')';
+          if (res.taskChangesApplied || res.taskChangesFailed) {
+            msg += '\n・全タスク編集: ' + res.taskChangesApplied + '件適用';
+            if (res.taskChangesFailed) msg += ' / ' + res.taskChangesFailed + '件失敗';
+          }
+          $('result').innerHTML = '<div class="resultBanner ok">' + escapeHtml(msg) + '</div>';
+          appendChat('system', '✅ 書き込み完了: 毎日のタスク ' + res.dailyWritten + '件 / 週予定 ' + res.scheduleWritten + '件 / 全タスク編集 ' + (res.taskChangesApplied||0) + '件');
+        } else {
+          $('result').innerHTML = '<div class="resultBanner err">❌ ' + escapeHtml(res && res.error || '不明なエラー') + '</div>';
+        }
+      })
+      .withFailureHandler(err => {
+        writeBtn.disabled = false;
+        writeBtn.textContent = '📥 Write it down';
+        $('result').innerHTML = '<div class="resultBanner err">❌ 通信エラー: ' + escapeHtml(err && err.message || err) + '</div>';
+      })
+      .plannerCommit(state.plan, opts);
+  }
+
+  function discardPlan() {
+    state.plan = null;
+    $('blueprintWrap').style.display = 'none';
+    $('result').innerHTML = '';
+    appendChat('system', '案を破棄しました。新しい指示をどうぞ。');
+  }
+</script>
+</body>
+</html>
