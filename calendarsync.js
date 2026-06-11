@@ -22,7 +22,7 @@
  *   - 同じ予定名が連続する時間帯は1つのイベントにまとめる
  *   - 「@場所名」を含むセルは場所情報としてカレンダーに反映
  *   - セル内改行で複数予定が書かれている場合、それぞれ別イベントとして作成
- *   - 表示中の日付範囲のカレンダー予定を毎回クリア＆再作成（上書きモード）
+ *   - 表示中の日付範囲を差分同期（変更がない予定は作成・削除しない）
  *   - トリガーで自動実行（毎日 or 毎時間）
  *   - 「授業」行は終日イベントとして登録（オプション）
  *
@@ -96,8 +96,24 @@ function syncToCalendarWeek()    { syncToCalendar(SYNC_MODE.WEEK); }
  * @param {string} mode - SYNC_MODE の値。省略時は 'day'（1日更新）
  */
 function syncToCalendar(mode) {
-  mode = mode || SYNC_MODE.DAY;
+  // 時間主導トリガーはイベントオブジェクトを引数に渡すため、
+  // 明示された同期モード以外は必ず1日更新として扱う。
+  mode = Object.values(SYNC_MODE).includes(mode) ? mode : SYNC_MODE.DAY;
 
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(1000)) {
+    Logger.log('別のカレンダー同期が実行中のため、今回の同期をスキップしました。');
+    return;
+  }
+
+  try {
+    syncToCalendarInternal_(mode);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function syncToCalendarInternal_(mode) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.SHEET_NAME);
   if (!sheet) {
     throw new Error(
@@ -185,13 +201,11 @@ function syncToCalendar(mode) {
     return;
   }
 
-  // ★ 絞り込み後の日付範囲のみ既存の同期イベントを削除
+  // ★ 対象日付の予定を構築し、変更分だけカレンダーへ反映
   const targetDates = dates.filter(d => d.date !== null).map(d => d.date);
-  deleteExistingSyncedEvents(calendar, targetDates);
+  const desiredEvents = [];
 
-  let createdCount = 0;
-
-  // 対象の各日付列について予定を作成
+  // 対象の各日付列について同期予定を構築
   for (const entry of dates) {
     if (!entry.date) continue;
 
@@ -201,8 +215,12 @@ function syncToCalendar(mode) {
       if (classCell) {
         const className = String(classCell).trim();
         if (className && !shouldSkip(className)) {
-          createAllDayEvent(calendar, entry.date, className);
-          createdCount++;
+          desiredEvents.push({
+            allDay: true,
+            title: className,
+            date: entry.date,
+            location: '',
+          });
         }
       }
     }
@@ -210,15 +228,24 @@ function syncToCalendar(mode) {
     // 時間スロットの予定を作成
     const events = buildEventsForColumn(data, entry.col, entry.date, times);
     for (const event of events) {
-      createCalendarEvent(calendar, event);
-      createdCount++;
+      desiredEvents.push({
+        allDay: false,
+        title: event.name,
+        startTime: event.startTime,
+        endTime: event.endTime,
+        location: event.location || '',
+      });
     }
   }
 
+  const result = syncCalendarEvents_(calendar, targetDates, desiredEvents);
   const modeLabel = mode === SYNC_MODE.DAY ? '1日' : mode === SYNC_MODE.WEEK_END ? '週末まで' : '1週間';
-  Logger.log(`同期完了（${modeLabel}）: ${createdCount} 件のイベントを作成しました。`);
+  Logger.log(
+    `同期完了（${modeLabel}）: 作成 ${result.created} 件 / 更新 ${result.updated} 件 / ` +
+    `削除 ${result.deleted} 件 / 変更なし ${result.unchanged} 件`
+  );
   SpreadsheetApp.getActiveSpreadsheet().toast(
-    `${createdCount} 件の予定をカレンダーに同期しました（${modeLabel}更新）`,
+    `作成${result.created}・更新${result.updated}・削除${result.deleted}件（${modeLabel}更新）`,
     '同期完了',
     5
   );
@@ -545,61 +572,166 @@ function addMinutes(date, hours, minutes, addMin) {
 
 // ==================== カレンダー操作 ====================
 
-/**
- * 同期タグが付いた既存イベントを削除する
- */
-function deleteExistingSyncedEvents(calendar, dates) {
+function getCalendarSyncRange_(dates) {
   const validDates = dates.filter(d => d !== null);
-  if (validDates.length === 0) return;
+  if (validDates.length === 0) return null;
 
-  const minDate = new Date(Math.min(...validDates.map(d => d.getTime())));
-  const maxDate = new Date(Math.max(...validDates.map(d => d.getTime())));
+  const start = new Date(Math.min(...validDates.map(d => d.getTime())));
+  const end = new Date(Math.max(...validDates.map(d => d.getTime())));
 
-  minDate.setHours(0, 0, 0, 0);
-  maxDate.setDate(maxDate.getDate() + 1);
-  maxDate.setHours(23, 59, 59, 999);
+  start.setHours(0, 0, 0, 0);
+  end.setDate(end.getDate() + 1);
+  end.setHours(0, 0, 0, 0);
 
-  const existingEvents = calendar.getEvents(minDate, maxDate);
-  let deletedCount = 0;
-
-  for (const event of existingEvents) {
-    const description = event.getDescription() || '';
-    if (description.includes(CONFIG.SYNC_TAG)) {
-      event.deleteEvent();
-      deletedCount++;
-    }
-  }
-
-  Logger.log(`既存の同期イベント ${deletedCount} 件を削除しました。`);
+  return { start, end };
 }
 
-/**
- * カレンダーにイベントを作成する（時間指定）
- */
-function createCalendarEvent(calendar, event) {
-  const options = {
-    description: CONFIG.SYNC_TAG + '\nスプレッドシートから自動同期された予定です。',
-  };
-  if (event.location) {
-    options.location = event.location;
+function getDesiredEventExactKey_(event) {
+  if (event.allDay) {
+    return ['allDay', dateKey_(event.date), event.title, event.location || ''].join('|');
   }
+  return [
+    'timed',
+    event.startTime.getTime(),
+    event.endTime.getTime(),
+    event.title,
+    event.location || '',
+  ].join('|');
+}
 
-  calendar.createEvent(event.name, event.startTime, event.endTime, options);
+function getExistingEventExactKey_(event) {
+  if (event.isAllDayEvent()) {
+    return [
+      'allDay',
+      dateKey_(event.getAllDayStartDate()),
+      event.getTitle(),
+      event.getLocation() || '',
+    ].join('|');
+  }
+  return [
+    'timed',
+    event.getStartTime().getTime(),
+    event.getEndTime().getTime(),
+    event.getTitle(),
+    event.getLocation() || '',
+  ].join('|');
+}
 
-  Logger.log(
-    `作成: ${event.name}${event.location ? ' @' + event.location : ''} ` +
-    `(${formatDateTime(event.startTime)} - ${formatDateTime(event.endTime)})`
+function getDesiredEventSlotKey_(event) {
+  return event.allDay
+    ? 'allDay|' + dateKey_(event.date)
+    : ['timed', event.startTime.getTime(), event.endTime.getTime()].join('|');
+}
+
+function getExistingEventSlotKey_(event) {
+  return event.isAllDayEvent()
+    ? 'allDay|' + dateKey_(event.getAllDayStartDate())
+    : ['timed', event.getStartTime().getTime(), event.getEndTime().getTime()].join('|');
+}
+
+function dateKey_(date) {
+  return Utilities.formatDate(date, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+}
+
+function calendarEventDescription_(allDay) {
+  return CONFIG.SYNC_TAG + '\n' + (
+    allDay
+      ? 'スプレッドシートの「授業」行から自動同期。'
+      : 'スプレッドシートから自動同期された予定です。'
   );
 }
 
 /**
- * カレンダーに終日イベントを作成する（授業行用）
+ * 同期対象を比較し、作成・更新・削除が必要な予定だけ変更する。
  */
-function createAllDayEvent(calendar, date, title) {
-  calendar.createAllDayEvent(title, date, {
-    description: CONFIG.SYNC_TAG + '\nスプレッドシートの「授業」行から自動同期。',
+function syncCalendarEvents_(calendar, dates, desiredEvents) {
+  const range = getCalendarSyncRange_(dates);
+  if (!range) return { created: 0, updated: 0, deleted: 0, unchanged: 0 };
+
+  const existingEvents = calendar.getEvents(range.start, range.end).filter(event => {
+    const description = event.getDescription() || '';
+    return description.includes(CONFIG.SYNC_TAG);
   });
-  Logger.log(`作成（終日）: ${title} (${Utilities.formatDate(date, Session.getScriptTimeZone(), 'M/d')})`);
+
+  const existingByExactKey = {};
+  existingEvents.forEach(event => {
+    const key = getExistingEventExactKey_(event);
+    if (!existingByExactKey[key]) existingByExactKey[key] = [];
+    existingByExactKey[key].push(event);
+  });
+
+  const matchedEvents = new Set();
+  const unmatchedDesired = [];
+  let unchanged = 0;
+
+  desiredEvents.forEach(desired => {
+    const matches = existingByExactKey[getDesiredEventExactKey_(desired)] || [];
+    const existing = matches.find(event => !matchedEvents.has(event));
+    if (existing) {
+      matchedEvents.add(existing);
+      unchanged++;
+    } else {
+      unmatchedDesired.push(desired);
+    }
+  });
+
+  const existingBySlotKey = {};
+  existingEvents.forEach(event => {
+    if (matchedEvents.has(event)) return;
+    const key = getExistingEventSlotKey_(event);
+    if (!existingBySlotKey[key]) existingBySlotKey[key] = [];
+    existingBySlotKey[key].push(event);
+  });
+
+  let created = 0;
+  let updated = 0;
+  let deleted = 0;
+
+  unmatchedDesired.forEach(desired => {
+    const slotMatches = existingBySlotKey[getDesiredEventSlotKey_(desired)] || [];
+    const existing = slotMatches.find(event => !matchedEvents.has(event));
+
+    if (existing) {
+      updateCalendarEvent_(existing, desired);
+      matchedEvents.add(existing);
+      updated++;
+    } else {
+      createCalendarEvent_(calendar, desired);
+      created++;
+    }
+  });
+
+  existingEvents.forEach(event => {
+    if (matchedEvents.has(event)) return;
+    event.deleteEvent();
+    deleted++;
+  });
+
+  return { created, updated, deleted, unchanged };
+}
+
+function updateCalendarEvent_(existing, desired) {
+  const description = calendarEventDescription_(desired.allDay);
+  if (existing.getTitle() !== desired.title) existing.setTitle(desired.title);
+  if ((existing.getLocation() || '') !== (desired.location || '')) {
+    existing.setLocation(desired.location || '');
+  }
+  if ((existing.getDescription() || '') !== description) {
+    existing.setDescription(description);
+  }
+}
+
+function createCalendarEvent_(calendar, event) {
+  const options = {
+    description: calendarEventDescription_(event.allDay),
+  };
+  if (event.location) options.location = event.location;
+
+  if (event.allDay) {
+    calendar.createAllDayEvent(event.title, event.date, options);
+  } else {
+    calendar.createEvent(event.title, event.startTime, event.endTime, options);
+  }
 }
 
 function formatDateTime(dt) {

@@ -631,7 +631,7 @@ function importNewGoogleTasksToSheet_(sheet, taskListId) {
     if (task.due) {
       dueDate = parseTaskDueToLocalDate_(task.due);
       if (dueDate) {
-        pair = findPairByDate_(sheet, dueDate) || createDayPairColumn_(sheet, dueDate);
+        pair = findPairByDate_(sheet, dueDate) || createDayPairColumn_(sheet, dueDate, map);
       }
     }
     if (!pair) {
@@ -639,7 +639,7 @@ function importNewGoogleTasksToSheet_(sheet, taskListId) {
       // (古い日付を非表示にしている運用なので「今日」は実質的に左端の表示中列になる)
       const _now = new Date();
       const _today = new Date(_now.getFullYear(), _now.getMonth(), _now.getDate());
-      pair = findPairByDate_(sheet, _today) || createDayPairColumn_(sheet, _today);
+      pair = findPairByDate_(sheet, _today) || createDayPairColumn_(sheet, _today, map);
       if (!pair) {
         // どうしても作れなければ最終手段で左端表示中列
         pair = findLeftmostVisiblePair_(sheet);
@@ -1096,7 +1096,7 @@ function findPairByDate_(sheet, targetDate) {
   return null;
 }
 
-function createDayPairColumn_(sheet, dateObj) {
+function createDayPairColumn_(sheet, dateObj, mapOpt) {
   const pairs = getTaskColumnPairs_(sheet);
   let titleCol, doneCol;
 
@@ -1104,8 +1104,25 @@ function createDayPairColumn_(sheet, dateObj) {
     titleCol = TASK_SYNC_CONFIG.START_COL;
     doneCol = titleCol + 1;
   } else {
-    const lastPair = pairs[pairs.length - 1];
-    titleCol = lastPair.titleCol + TASK_SYNC_CONFIG.PAIR_WIDTH;
+    const nextPair = pairs.find(pair => {
+      const header = sheet.getRange(TASK_SYNC_CONFIG.HEADER_ROW, pair.titleCol).getValue();
+      const pairDate = parseDateOnly_(header);
+      return pairDate && isBeforeDate_(dateObj, pairDate);
+    });
+
+    if (nextPair) {
+      titleCol = nextPair.titleCol;
+      sheet.insertColumnsBefore(titleCol, TASK_SYNC_CONFIG.PAIR_WIDTH);
+      shiftTaskMapColumnsAfterInsertion_(
+        sheet.getName(),
+        titleCol,
+        TASK_SYNC_CONFIG.PAIR_WIDTH,
+        mapOpt
+      );
+    } else {
+      const lastPair = pairs[pairs.length - 1];
+      titleCol = lastPair.titleCol + TASK_SYNC_CONFIG.PAIR_WIDTH;
+    }
     doneCol = titleCol + 1;
   }
 
@@ -1129,21 +1146,69 @@ function ensureDayPairColumnsThrough_(sheet, targetDate) {
   let pairs = getTaskColumnPairs_(sheet);
   if (pairs.length === 0) {
     createDayPairColumn_(sheet, targetDate);
-    pairs = getTaskColumnPairs_(sheet);
+    return;
   }
 
-  let lastPair = pairs[pairs.length - 1];
-  let lastDate = lastPair
-    ? parseDateOnly_(sheet.getRange(TASK_SYNC_CONFIG.HEADER_ROW, lastPair.titleCol).getValue())
-    : null;
-  if (!lastDate) return;
+  if (findPairByDate_(sheet, targetDate)) return;
 
-  while (isBeforeDate_(lastDate, targetDate)) {
-    const nextDate = new Date(lastDate);
+  let latestDateBeforeTarget = null;
+  for (const pair of pairs) {
+    const pairDate = parseDateOnly_(
+      sheet.getRange(TASK_SYNC_CONFIG.HEADER_ROW, pair.titleCol).getValue()
+    );
+    if (!pairDate || !isBeforeDate_(pairDate, targetDate)) continue;
+    if (!latestDateBeforeTarget || isBeforeDate_(latestDateBeforeTarget, pairDate)) {
+      latestDateBeforeTarget = pairDate;
+    }
+  }
+
+  if (!latestDateBeforeTarget) {
+    createDayPairColumn_(sheet, targetDate);
+    return;
+  }
+
+  let nextDate = new Date(latestDateBeforeTarget);
+  while (isBeforeDate_(nextDate, targetDate)) {
     nextDate.setDate(nextDate.getDate() + 1);
-    createDayPairColumn_(sheet, nextDate);
-    lastDate = nextDate;
+    if (!findPairByDate_(sheet, nextDate)) {
+      createDayPairColumn_(sheet, nextDate);
+    }
   }
+}
+
+/**
+ * 日付ペアの途中へ列を挿入した際、隠しマップ内の列番号とキーを追従させる。
+ *
+ * @param {string} sheetName - 列を挿入したシート名
+ * @param {number} startCol - 挿入位置（1-indexed）
+ * @param {number} columnCount - 挿入列数
+ * @param {Object=} mapOpt - 呼び出し元が保持しているマップ
+ */
+function shiftTaskMapColumnsAfterInsertion_(sheetName, startCol, columnCount, mapOpt) {
+  const map = mapOpt || getTaskMapStore_();
+  const shiftedMap = {};
+
+  Object.keys(map).forEach(key => {
+    const entry = map[key];
+    if (!entry) return;
+
+    if (entry.sheetName === sheetName) {
+      if (Number(entry.titleCol) >= startCol) entry.titleCol = Number(entry.titleCol) + columnCount;
+      if (Number(entry.doneCol) >= startCol) entry.doneCol = Number(entry.doneCol) + columnCount;
+    }
+
+    const shiftedKey = makeTaskMapKey_(
+      entry.sheetName,
+      entry.row,
+      entry.titleCol,
+      entry.doneCol
+    );
+    shiftedMap[shiftedKey] = entry;
+  });
+
+  Object.keys(map).forEach(key => { delete map[key]; });
+  Object.keys(shiftedMap).forEach(key => { map[key] = shiftedMap[key]; });
+  saveTaskMapStore_(map);
 }
 
 function formatDateHeader_(dateObj) {
