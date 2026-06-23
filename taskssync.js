@@ -37,7 +37,6 @@ const TASK_SYNC_CONFIG = {
   START_ROW: 2,
   START_COL: 1,     // A列
   PAIR_WIDTH: 2,    // (タスク名列, チェック列) の2列セット
-  MAX_SCAN_COLS: 80,
   CHECKBOX_ROW_COUNT: 15,
   TITLE_WIDTH_SOURCE_COL: 67, // BO列
 
@@ -1056,13 +1055,19 @@ function makeTaskMapKey_(sheetName, row, titleCol, doneCol) {
 
 function getTaskColumnPairs_(sheet) {
   const pairs = [];
-  const maxCol = Math.min(sheet.getLastColumn(), TASK_SYNC_CONFIG.MAX_SCAN_COLS);
+  const maxCol = sheet.getLastColumn();
+  if (maxCol < TASK_SYNC_CONFIG.START_COL) return pairs;
+
+  const headerValues = sheet.getRange(
+    TASK_SYNC_CONFIG.HEADER_ROW,
+    TASK_SYNC_CONFIG.START_COL,
+    1,
+    maxCol - TASK_SYNC_CONFIG.START_COL + 1
+  ).getValues()[0];
 
   for (let titleCol = TASK_SYNC_CONFIG.START_COL; titleCol <= maxCol; titleCol += TASK_SYNC_CONFIG.PAIR_WIDTH) {
     const doneCol = titleCol + 1;
-    if (doneCol > maxCol + 1) break;
-
-    const header = sheet.getRange(TASK_SYNC_CONFIG.HEADER_ROW, titleCol).getValue();
+    const header = headerValues[titleCol - TASK_SYNC_CONFIG.START_COL];
     const date = parseDateOnly_(header);
     if (!date) continue;
 
@@ -1122,6 +1127,13 @@ function createDayPairColumn_(sheet, dateObj, mapOpt) {
     } else {
       const lastPair = pairs[pairs.length - 1];
       titleCol = lastPair.titleCol + TASK_SYNC_CONFIG.PAIR_WIDTH;
+      sheet.insertColumnsAfter(lastPair.doneCol, TASK_SYNC_CONFIG.PAIR_WIDTH);
+      shiftTaskMapColumnsAfterInsertion_(
+        sheet.getName(),
+        titleCol,
+        TASK_SYNC_CONFIG.PAIR_WIDTH,
+        mapOpt
+      );
     }
     doneCol = titleCol + 1;
   }
@@ -1149,7 +1161,27 @@ function ensureDayPairColumnsThrough_(sheet, targetDate) {
     return;
   }
 
-  if (findPairByDate_(sheet, targetDate)) return;
+  const targetPair = findPairByDate_(sheet, targetDate);
+  if (targetPair) {
+    const targetIndex = pairs.findIndex(pair => pair.titleCol === targetPair.titleCol);
+    const previousPair = targetIndex > 0 ? pairs[targetIndex - 1] : null;
+    const isTailPair = targetIndex === pairs.length - 1;
+
+    if (!previousPair || !isTailPair) return;
+
+    const previousDate = parseDateOnly_(
+      sheet.getRange(TASK_SYNC_CONFIG.HEADER_ROW, previousPair.titleCol).getValue()
+    );
+    const expectedDate = previousDate ? addDays_(previousDate, 1) : null;
+
+    if (!expectedDate || !isBeforeDate_(expectedDate, targetDate)) return;
+
+    // 旧版は80列より右を走査できず、末尾の日付を今日で上書きしていた。
+    // その列を本来の翌日に戻し、不足日をこの後で新しい列として補完する。
+    sheet.getRange(TASK_SYNC_CONFIG.HEADER_ROW, targetPair.titleCol)
+      .setValue(formatDateHeader_(expectedDate));
+    pairs = getTaskColumnPairs_(sheet);
+  }
 
   let latestDateBeforeTarget = null;
   for (const pair of pairs) {
@@ -1375,6 +1407,12 @@ function isBeforeDate_(a, b) {
   const aa = new Date(a.getFullYear(), a.getMonth(), a.getDate()).getTime();
   const bb = new Date(b.getFullYear(), b.getMonth(), b.getDate()).getTime();
   return aa < bb;
+}
+
+function addDays_(dateObj, days) {
+  const result = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
+  result.setDate(result.getDate() + days);
+  return result;
 }
 
 function toTaskDueIso_(dateObj) {
