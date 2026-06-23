@@ -62,7 +62,7 @@ const CONFIG = {
 
   // カレンダーに登録しないキーワード（完全一致）
   // ※「休み」は授業が休みという意味なのでスキップしない
-  SKIP_KEYWORDS: [],
+  SKIP_KEYWORDS: ["就寝"],
 
   // カッコ付きの予定（例:「(J PREP単語)」）もカレンダーに登録するか
   INCLUDE_PARENTHESIZED: true,
